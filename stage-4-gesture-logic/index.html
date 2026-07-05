@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Stage 4: Gesture Logic</title>
+  <style>
+    body {
+      background-color: #0a0a0a;
+      color: #eaeaea;
+      font-family: monospace;
+      text-align: center;
+      padding-top: 30px;
+    }
+
+    h1 {
+      color: #ff2fb0;
+    }
+
+    #video-wrapper {
+      position: relative;
+      width: 640px;
+      height: 480px;
+      margin: 0 auto;
+      border: 2px solid #ff2fb0;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    video {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 640px;
+      height: 480px;
+      transform: scaleX(-1);
+    }
+
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 640px;
+      height: 480px;
+      transform: scaleX(-1);
+    }
+
+    #status {
+      margin-top: 12px;
+      font-size: 14px;
+      color: #888;
+    }
+
+    #gesture-panel {
+      margin-top: 20px;
+      font-size: 16px;
+      color: #7fffd4;
+    }
+
+    .gesture-active {
+      color: #ff2fb0;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Stage 4: Gesture Logic</h1>
+  <div id="video-wrapper">
+    <video id="webcam" autoplay playsinline></video>
+    <canvas id="overlay" width="640" height="480"></canvas>
+  </div>
+  <p id="status">Loading hand tracking model...</p>
+  <div id="gesture-panel">
+    <div id="pinch-status">Pinch: not detected</div>
+    <div id="raise-status">Raise: not detected</div>
+  </div>
+
+  <script type="module">
+    import {
+      HandLandmarker,
+      FilesetResolver
+    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('overlay');
+    const ctx = canvas.getContext('2d');
+    const status = document.getElementById('status');
+    const pinchStatus = document.getElementById('pinch-status');
+    const raiseStatus = document.getElementById('raise-status');
+
+    const FINGERTIP_INDICES = [4, 8, 12, 16, 20];
+
+    // thresholds, tune these numbers if detection feels too sensitive or not sensitive enough
+    const PINCH_DISTANCE_THRESHOLD = 0.05;
+    const RAISE_Y_THRESHOLD = 0.4;
+
+    let handLandmarker;
+
+    async function setupHandLandmarker() {
+      const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+      );
+
+      handLandmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath:
+            "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+          delegate: "GPU"
+        },
+        runningMode: "VIDEO",
+        numHands: 2
+      });
+
+      status.textContent = "Model loaded. Starting camera...";
+      startWebcam();
+    }
+
+    async function startWebcam() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false
+        });
+        video.srcObject = stream;
+
+        video.addEventListener('loadeddata', () => {
+          status.textContent = "Tracking active. Move your hand in front of the camera.";
+          detectLoop();
+        });
+      } catch (error) {
+        status.textContent = "Camera access failed: " + error.message;
+      }
+    }
+
+    function drawGlowDot(x, y, color) {
+      const pixelX = x * canvas.width;
+      const pixelY = y * canvas.height;
+
+      const gradient = ctx.createRadialGradient(pixelX, pixelY, 0, pixelX, pixelY, 25);
+      gradient.addColorStop(0, color.glow);
+      gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(pixelX, pixelY, 25, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = color.core;
+      ctx.beginPath();
+      ctx.arc(pixelX, pixelY, 6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // straight line distance between two landmark points
+    function getDistance(pointA, pointB) {
+      const dx = pointA.x - pointB.x;
+      const dy = pointA.y - pointB.y;
+      return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    function detectLoop() {
+      try {
+        const now = performance.now();
+        const results = handLandmarker.detectForVideo(video, now);
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        let pinchDetected = false;
+        let raiseDetected = false;
+
+        if (results.landmarks && results.landmarks.length > 0) {
+          results.landmarks.forEach((hand) => {
+            const thumbTip = hand[4];
+            const indexTip = hand[8];
+            const wrist = hand[0];
+
+            const pinchDistance = getDistance(thumbTip, indexTip);
+            const isPinching = pinchDistance < PINCH_DISTANCE_THRESHOLD;
+            if (isPinching) pinchDetected = true;
+
+            const isRaised = wrist.y < RAISE_Y_THRESHOLD;
+            if (isRaised) raiseDetected = true;
+
+            // color fingertip dots pink normally, cyan if pinching, to give instant visual feedback
+            const dotColor = isPinching
+              ? { glow: 'rgba(127, 255, 212, 0.8)', core: '#7fffd4' }
+              : { glow: 'rgba(255, 47, 176, 0.8)', core: '#ff2fb0' };
+
+            FINGERTIP_INDICES.forEach((index) => {
+              const point = hand[index];
+              drawGlowDot(point.x, point.y, dotColor);
+            });
+          });
+        }
+
+        pinchStatus.textContent = pinchDetected ? "Pinch: detected" : "Pinch: not detected";
+        pinchStatus.className = pinchDetected ? "gesture-active" : "";
+
+        raiseStatus.textContent = raiseDetected ? "Raise: detected" : "Raise: not detected";
+        raiseStatus.className = raiseDetected ? "gesture-active" : "";
+
+      } catch (error) {
+        console.error("Detection loop error:", error);
+      }
+
+      requestAnimationFrame(detectLoop);
+    }
+
+    setupHandLandmarker();
+  </script>
+
+</body>
+</html>
