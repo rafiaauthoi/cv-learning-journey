@@ -13,7 +13,6 @@ All tools in this repo are free and open source. No paid services or APIs are us
 - MediaPipe (hand and face landmark detection)
 - Canvas API (drawing and visual overlays)
 - Tone.js (sound generation)
-- Three.js (where 3D visuals are needed)
 
 ## Stages
 
@@ -29,7 +28,7 @@ Each folder is a self contained step. Open any folder's own README for setup ins
 
 ## Status
 
-Work in progress. Stages are added as they are completed.
+Complete. All 7 stages are done.
 
 ## For WMU Developer Club members
 
