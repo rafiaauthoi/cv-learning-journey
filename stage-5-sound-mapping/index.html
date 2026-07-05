@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Stage 5: Sound Mapping</title>
+  <script src="https://cdn.jsdelivr.net/npm/tone@14.8.49/build/Tone.js"></script>
+  <style>
+    body {
+      background-color: #0a0a0a;
+      color: #eaeaea;
+      font-family: monospace;
+      text-align: center;
+      padding-top: 30px;
+    }
+
+    h1 {
+      color: #ff2fb0;
+    }
+
+    #video-wrapper {
+      position: relative;
+      width: 640px;
+      height: 480px;
+      margin: 0 auto;
+      border: 2px solid #ff2fb0;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    video {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 640px;
+      height: 480px;
+      transform: scaleX(-1);
+    }
+
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 640px;
+      height: 480px;
+      transform: scaleX(-1);
+    }
+
+    #status {
+      margin-top: 12px;
+      font-size: 14px;
+      color: #888;
+    }
+
+    #startButton {
+      margin-top: 20px;
+      background-color: #ff2fb0;
+      color: #0a0a0a;
+      border: none;
+      padding: 12px 24px;
+      font-family: monospace;
+      font-size: 14px;
+      font-weight: bold;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    #startButton:hover {
+      background-color: #ff5fc4;
+    }
+
+    #sound-panel {
+      margin-top: 20px;
+      font-size: 16px;
+      color: #7fffd4;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Stage 5: Sound Mapping</h1>
+
+  <button id="startButton">Start Audio</button>
+
+  <div id="video-wrapper">
+    <video id="webcam" autoplay playsinline></video>
+    <canvas id="overlay" width="640" height="480"></canvas>
+  </div>
+  <p id="status">Click "Start Audio" to begin.</p>
+  <div id="sound-panel">
+    <div id="pitch-status">Pitch: --</div>
+    <div id="volume-status">Volume: --</div>
+  </div>
+
+  <script type="module">
+    import {
+      HandLandmarker,
+      FilesetResolver
+    } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('overlay');
+    const ctx = canvas.getContext('2d');
+    const status = document.getElementById('status');
+    const startButton = document.getElementById('startButton');
+    const pitchStatus = document.getElementById('pitch-status');
+    const volumeStatus = document.getElementById('volume-status');
+
+    let handLandmarker;
+    let audioStarted = false;
+    let synth;
+
+    // frequency range for the theremin effect, low note to high note
+    const MIN_FREQUENCY = 130;
+    const MAX_FREQUENCY = 1000;
+
+    startButton.addEventListener('click', async () => {
+      if (audioStarted) return;
+
+      // Tone.js requires this start call to happen inside a real click, browsers block audio otherwise
+      await Tone.start();
+
+      synth = new Tone.Synth().toDestination();
+      synth.volume.value = -20;
+
+      audioStarted = true;
+      startButton.textContent = "Audio Running";
+      startButton.disabled = true;
+      status.textContent = "Loading hand tracking model...";
+
+      setupHandLandmarker();
+    });
+
+    async function setupHandLandmarker() {
+      const vision = await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+      );
+
+      handLandmarker = await HandLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath:
+            "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+          delegate: "GPU"
+        },
+        runningMode: "VIDEO",
+        numHands: 1
+      });
+
+      status.textContent = "Model loaded. Starting camera...";
+      startWebcam();
+    }
+
+    async function startWebcam() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false
+        });
+        video.srcObject = stream;
+
+        video.addEventListener('loadeddata', () => {
+          status.textContent = "Tracking active. Move your hand up and down to change pitch.";
+          detectLoop();
+        });
+      } catch (error) {
+        status.textContent = "Camera access failed: " + error.message;
+      }
+    }
+
+    function drawGlowDot(x, y) {
+      const pixelX = x * canvas.width;
+      const pixelY = y * canvas.height;
+
+      const gradient = ctx.createRadialGradient(pixelX, pixelY, 0, pixelX, pixelY, 30);
+      gradient.addColorStop(0, 'rgba(255, 47, 176, 0.8)');
+      gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(pixelX, pixelY, 30, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#ff2fb0';
+      ctx.beginPath();
+      ctx.arc(pixelX, pixelY, 8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // maps a value from one range to another, this is the core trick for turning coordinates into sound
+    function mapRange(value, inMin, inMax, outMin, outMax) {
+      return ((value - inMin) / (inMax - inMin)) * (outMax - outMin) + outMin;
+    }
+
+    function detectLoop() {
+      try {
+        const now = performance.now();
+        const results = handLandmarker.detectForVideo(video, now);
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (results.landmarks && results.landmarks.length > 0) {
+          const hand = results.landmarks[0];
+          const wrist = hand[0];
+
+          drawGlowDot(wrist.x, wrist.y);
+
+          // y is 0 at top, 1 at bottom, so we flip it, higher hand should mean higher pitch
+          const frequency = mapRange(wrist.y, 0, 1, MAX_FREQUENCY, MIN_FREQUENCY);
+
+          // x maps directly to volume, hand to the right is louder
+          const volumeDb = mapRange(wrist.x, 0, 1, -40, -5);
+
+          if (synth) {
+            synth.frequency.value = frequency;
+            synth.volume.value = volumeDb;
+
+            if (!synth.isPlaying) {
+              synth.triggerAttack(frequency);
+              synth.isPlaying = true;
+            }
+          }
+
+          pitchStatus.textContent = "Pitch: " + Math.round(frequency) + " Hz";
+          volumeStatus.textContent = "Volume: " + Math.round(volumeDb) + " dB";
+
+        } else {
+          if (synth && synth.isPlaying) {
+            synth.triggerRelease();
+            synth.isPlaying = false;
+          }
+          pitchStatus.textContent = "Pitch: --";
+          volumeStatus.textContent = "Volume: --";
+        }
+
+      } catch (error) {
+        console.error("Detection loop error:", error);
+      }
+
+      requestAnimationFrame(detectLoop);
+    }
+  </script>
+
+</body>
+</html>
