@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Stage 1: Webcam Feed</title>
+  <style>
+    body {
+      background-color: #0a0a0a;
+      color: #eaeaea;
+      font-family: monospace;
+      text-align: center;
+      padding-top: 40px;
+    }
+
+    h1 {
+      color: #ff2fb0;
+    }
+
+    video {
+      border: 2px solid #ff2fb0;
+      border-radius: 8px;
+      width: 640px;
+      height: 480px;
+      background-color: black;
+    }
+
+    #status {
+      margin-top: 12px;
+      font-size: 14px;
+      color: #888;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Stage 1: Webcam Feed</h1>
+  <video id="webcam" autoplay playsinline></video>
+  <p id="status">Requesting camera access...</p>
+
+  <script>
+    const video = document.getElementById('webcam');
+    const status = document.getElementById('status');
+
+    async function startWebcam() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false
+        });
+        video.srcObject = stream;
+        status.textContent = 'Camera connected. You should see yourself above.';
+      } catch (error) {
+        status.textContent = 'Camera access failed: ' + error.message;
+      }
+    }
+
+    startWebcam();
+  </script>
+
+</body>
+</html>
